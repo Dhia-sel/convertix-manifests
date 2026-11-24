@@ -14,7 +14,7 @@ Manifests Kubernetes de [convertix](https://github.com/Dhia-sel/convertix), une 
 │   └── kustomization.yaml
 └── overlays/
     ├── dev/kustomization.yaml   # namespace, replicas et tag d'image de dev
-    └── prod/kustomization.yaml  # à venir (dépend du déploiement AWS)
+    └── prod/kustomization.yaml  # squelette (namespace, replicas), image ECR à venir
 ```
 
 ## Principe base + overlays
@@ -25,7 +25,7 @@ La **base** décrit ce qui est commun à tous les environnements. Chaque **overl
 |---|---|---|---|
 | base | (aucun) | 2 | `ghcr.io/dhia-sel/convertix:0.1.0` |
 | dev | `convertix-dev` | 1 | `ghcr.io/dhia-sel/convertix:0.1.0` |
-| prod | à venir | à venir | à venir (ECR) |
+| prod | `convertix-prod` | 2 | hérite de la base, image ECR à venir |
 
 ## Rendre les manifests localement
 
@@ -34,7 +34,29 @@ Prérequis : `kubectl` (Kustomize est intégré).
 ```powershell
 kubectl kustomize base
 kubectl kustomize overlays/dev
+kubectl kustomize overlays/prod
 ```
+
+## Mise en route sur un cluster kind
+
+Prérequis : Docker, `kind`, `kubectl`.
+
+```powershell
+kind create cluster --name convertix
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=Ready pods --all -n argocd --timeout=300s
+kubectl apply -f argocd/application-dev.yaml
+```
+
+Vérification :
+
+```powershell
+kubectl get applications.argoproj.io -n argocd
+kubectl get pods -n convertix-dev
+```
+
+L'Application doit passer à `Synced` et `Healthy`, et un pod `convertix` doit tourner dans `convertix-dev`. Le namespace est créé par ArgoCD (`CreateNamespace=true`).
 
 ## Flux GitOps
 
@@ -42,6 +64,21 @@ kubectl kustomize overlays/dev
 2. ArgoCD détecte le commit et synchronise le cluster (`argocd/application-dev.yaml`).
 3. Une ressource supprimée du dépôt est supprimée du cluster (`prune`), et une modification manuelle faite avec `kubectl` est annulée (`selfHeal`).
 4. **Rollback** : `git revert` du commit fautif, puis push. Aucune commande `kubectl` n'est nécessaire.
+
+## Tests réalisés (dev, cluster kind)
+
+| Propriété | Test | Résultat |
+|---|---|---|
+| Déploiement par commit | `count: 1` passé à `count: 2` dans `overlays/dev`, commit `3e32ac4`, push | un 2e pod créé par ArgoCD, sans `kubectl apply` |
+| Correction de dérive (`selfHeal`) | `kubectl scale deployment convertix -n convertix-dev --replicas=5` | le déploiement est revenu à `2/2` immédiatement, ArgoCD a rétabli la valeur de Git |
+| Rollback | `git revert HEAD`, commit `6439ee7`, push | retour à 1 pod, application `Synced` et `Healthy` |
+
+Test de l'application déployée :
+
+```powershell
+kubectl port-forward -n convertix-dev svc/convertix 8080:80
+curl.exe http://localhost:8080/healthz
+```
 
 ## Choix de sécurité du Deployment
 
@@ -57,6 +94,7 @@ kubectl kustomize overlays/dev
 - [x] Base Kustomize (Deployment, Service)
 - [x] Overlay dev
 - [x] Application ArgoCD dev
-- [ ] Synchronisation ArgoCD testée sur un cluster kind
+- [x] Synchronisation ArgoCD testée sur un cluster kind (commit, `selfHeal`, rollback)
+- [x] Squelette de l'overlay prod (namespace, replicas)
 - [ ] Mise à jour automatique du tag d'image par la CI
-- [ ] Overlay prod et déploiement AWS (OIDC, ECR)
+- [ ] Image ECR dans l'overlay prod et déploiement AWS
