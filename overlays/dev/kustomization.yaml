@@ -5,7 +5,7 @@ resources:
 namespace: convertix-dev
 replicas:
   - name: convertix
-    count: 2
+    count: 1
 images:
   - name: ghcr.io/dhia-sel/convertix
     newTag: "0.1.0"
